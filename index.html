@@ -1,410 +1,1130 @@
-<!DOCTYPE html>
-<html lang="ko">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Simple Link Manager (Linky)</title>
-    <!-- Tailwind CSS CDN 로드 -->
-    <script src="https://cdn.tailwindcss.com"></script>
-    <!-- Font: Inter -->
-    <style>
-        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@100..900&display=swap');
-        body {
-            font-family: 'Inter', sans-serif;
-            background-color: #f3f4f6;
+import React, { useState, useEffect, useCallback, useMemo } from 'react';
+import { initializeApp } from 'firebase/app';
+import { getAuth, signInWithCustomToken, signInAnonymously, onAuthStateChanged, GoogleAuthProvider, FacebookAuthProvider, signInWithPopup, signOut } from 'firebase/auth';
+import { getFirestore, doc, setDoc, onSnapshot, collection, query, addDoc, updateDoc, deleteDoc, getDoc } from 'firebase/firestore';
+import { Loader, User, Zap, Settings, Plus, LayoutList, Link as LinkIcon, Edit, Trash2, Globe, Check, X, Palette, Type, Menu, LogOut, Lock, Image, Upload, Film, Instagram, Facebook, Twitter, Link2 } from 'lucide-react';
+
+// --- 1. GLOBALS & FIREBASE SETUP ---
+
+const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
+const firebaseConfig = JSON.parse(typeof __firebase_config !== 'undefined' ? __firebase_config : '{}');
+const initialAuthToken = typeof __initial_auth_token !== 'undefined' ? __initial_auth_token : null;
+
+let app;
+let auth;
+let db;
+
+try {
+  app = initializeApp(firebaseConfig);
+  auth = getAuth(app);
+  db = getFirestore(app);
+  // setLogLevel('Debug'); // Uncomment for debugging Firestore
+} catch (e) {
+  console.error("Firebase initialization failed:", e);
+}
+
+// --- 2. MULTILINGUAL DICTIONARY (i18n) ---
+
+const translations = {
+  ko: {
+    appTitle: "링크 관리 서비스",
+    tagline: "몇 번의 클릭으로 링크를 관리하세요.",
+    loginTitle: "환영합니다!",
+    loginSubtitle: "소셜 계정으로 로그인하거나 가입하세요",
+    socialLogin: (provider) => `${provider}로 계속하기`,
+    logout: "로그아웃",
+    profile: "프로필",
+    dashboard: "대시보드",
+    settings: "설정",
+    publicView: "공개 페이지 미리보기",
+    premium: "프리미엄",
+    freeTier: "무료 플랜",
+    pageLimit: (count) => `페이지 ${count}개 제한`,
+    linkLimit: (count) => `링크 ${count}개 제한`,
+    createPage: "새 페이지 만들기",
+    pageNamePlaceholder: "페이지 이름 (예: mypage)",
+    create: "생성",
+    cancel: "취소",
+    pageNameError: "페이지 이름은 필수이며 중복될 수 없습니다.",
+    pageNameExists: "이미 존재하는 페이지 이름입니다.",
+    pageCreatedSuccess: "페이지가 성공적으로 생성되었습니다!",
+    pageDeletedSuccess: "페이지가 성공적으로 삭제되었습니다.",
+    pageLimitReached: "페이지 생성 제한에 도달했습니다 (최대 3개).",
+    noPages: "아직 생성된 페이지가 없습니다.",
+    editPage: (name) => `${name} 페이지 편집`,
+    addLink: "링크 추가",
+    editLink: "링크 수정",
+    update: "업데이트",
+    linkTitle: "링크 제목",
+    linkUrl: "링크 주소 (URL)",
+    linkStyle: "링크 스타일",
+    styleBar: "바(Bar)형",
+    styleBox: "박스(Box)형",
+    linkAddedSuccess: "링크가 성공적으로 추가되었습니다.",
+    linkDeletedSuccess: "링크가 성공적으로 삭제되었습니다.",
+    linkLimitReached: "링크 추가 제한에 도달했습니다 (최대 10개).",
+    selectIcon: "아이콘 선택",
+    customIconUrl: "아이콘 주소 (Bar Style)",
+    customImageUrl: "이미지 주소 (Box Style) / 썸네일",
+    designSettings: "디자인 설정",
+    bgColor: "배경색",
+    bgImage: "배경 이미지 주소",
+    profileImage: "프로필 이미지 주소 (Icon)", // <-- NEW TRANSLATION
+    fontFamily: "폰트",
+    saveChanges: "변경 사항 저장",
+    language: "언어",
+    profileUpdateSuccess: "프로필이 업데이트되었습니다.",
+    userProfile: "사용자 프로필",
+    displayName: "표시 이름",
+    email: "이메일",
+    updateProfile: "프로필 업데이트",
+    imageUpload: "이미지 업로드 (URL 사용)",
+    socialIconAuto: "소셜 아이콘 자동 설정됨",
+    premiumFeature: "프리미엄 기능",
+  },
+  en: {
+    appTitle: "Link Manager Service",
+    tagline: "Manage your links in a few clicks.",
+    loginTitle: "Welcome!",
+    loginSubtitle: "Sign up or log in with your social account",
+    socialLogin: (provider) => `Continue with ${provider}`,
+    logout: "Logout",
+    profile: "Profile",
+    dashboard: "Dashboard",
+    settings: "Settings",
+    publicView: "Public Page Preview",
+    premium: "Premium",
+    freeTier: "Free Plan",
+    pageLimit: (count) => `Page limit: ${count}`,
+    linkLimit: (count) => `Link limit: ${count}`,
+    createPage: "Create New Page",
+    pageNamePlaceholder: "Page Name (e.g., mypage)",
+    create: "Create",
+    cancel: "Cancel",
+    pageNameError: "Page name is required and must be unique.",
+    pageNameExists: "Page name already exists.",
+    pageCreatedSuccess: "Page created successfully!",
+    pageDeletedSuccess: "Page deleted successfully.",
+    pageLimitReached: "Page creation limit reached (Max 3).",
+    noPages: "No pages created yet.",
+    editPage: (name) => `Edit ${name} Page`,
+    addLink: "Add Link",
+    editLink: "Edit Link",
+    update: "Update",
+    linkTitle: "Link Title",
+    linkUrl: "Link URL",
+    linkStyle: "Link Style",
+    styleBar: "Bar Style",
+    styleBox: "Box Style",
+    linkAddedSuccess: "Link added successfully.",
+    linkDeletedSuccess: "Link deleted successfully.",
+    linkLimitReached: "Link addition limit reached (Max 10).",
+    selectIcon: "Select Icon",
+    customIconUrl: "Icon URL (Bar Style)",
+    customImageUrl: "Image URL (Box Style) / Thumbnail",
+    designSettings: "Design Settings",
+    bgColor: "Background Color",
+    bgImage: "Background Image URL",
+    profileImage: "Profile Image URL (Icon)", // <-- NEW TRANSLATION
+    fontFamily: "Font Family",
+    saveChanges: "Save Changes",
+    language: "Language",
+    profileUpdateSuccess: "Profile updated successfully.",
+    userProfile: "User Profile",
+    displayName: "Display Name",
+    email: "Email",
+    updateProfile: "Update Profile",
+    imageUpload: "Image Upload (Using URL)",
+    socialIconAuto: "Social Icon Auto Set",
+    premiumFeature: "Premium Feature",
+  },
+};
+
+const getInitialLanguage = () => {
+  const lang = navigator.language.split('-')[0];
+  return translations[lang] ? lang : 'ko';
+};
+
+// Map URL keywords to high-quality placeholder icons
+const getSocialIconUrl = (url) => {
+    url = url.toLowerCase();
+    if (url.includes('youtube.com') || url.includes('youtu.be')) return 'https://placehold.co/48/FF0000/ffffff?text=YT';
+    if (url.includes('instagram.com')) return 'https://placehold.co/48/E1306C/ffffff?text=IG';
+    if (url.includes('tiktok.com')) return 'https://placehold.co/48/000000/ffffff?text=TT';
+    if (url.includes('twitter.com') || url.includes('x.com')) return 'https://placehold.co/48/000000/ffffff?text=X';
+    if (url.includes('facebook.com')) return 'https://placehold.co/48/1877F2/ffffff?text=FB';
+    if (url.includes('tistory.com')) return 'https://placehold.co/48/009B82/ffffff?text=Ti';
+    if (url.includes('naver.com')) return 'https://placehold.co/48/2DB400/ffffff?text=N';
+    if (url.includes('kakao.com') || url.includes('kakaotalk.com')) return 'https://placehold.co/48/FEE500/000000?text=K';
+    return ''; // Default
+};
+
+
+// --- 3. CUSTOM COMPONENTS ---
+
+const LoadingScreen = () => (
+  <div className="flex flex-col items-center justify-center min-h-screen bg-gray-50 text-gray-700 p-4">
+    <Loader className="w-8 h-8 animate-spin text-indigo-600 mb-3" />
+    <p>Loading application...</p>
+  </div>
+);
+
+const IconButton = ({ children, onClick, className = '', title = '' }) => (
+  <button
+    onClick={onClick}
+    title={title}
+    className={`p-2 rounded-lg transition duration-200 hover:bg-indigo-100 active:scale-95 flex items-center justify-center ${className}`}
+  >
+    {children}
+  </button>
+);
+
+const Toast = ({ message, type, onClose }) => {
+  const bgColor = type === 'success' ? 'bg-green-500' : 'bg-red-500';
+  const Icon = type === 'success' ? Check : X;
+
+  useEffect(() => {
+    const timer = setTimeout(onClose, 3000);
+    return () => clearTimeout(timer);
+  }, [onClose]);
+
+  return (
+    <div className={`fixed bottom-4 right-4 p-4 rounded-xl shadow-lg text-white ${bgColor} flex items-center z-50`}>
+      <Icon className="w-5 h-5 mr-2" />
+      <span>{message}</span>
+    </div>
+  );
+};
+
+// --- 4. DATA FETCHING & STATE MANAGEMENT ---
+
+const useFirebaseData = () => {
+  const [user, setUser] = useState(null);
+  const [pages, setPages] = useState([]);
+  const [isAuthReady, setIsAuthReady] = useState(false);
+  const [isLoadingData, setIsLoadingData] = useState(true);
+
+  useEffect(() => {
+    if (!auth || !db) return;
+
+    // 1. Initial Authentication
+    const signInUser = async () => {
+      try {
+        if (initialAuthToken) {
+          await signInWithCustomToken(auth, initialAuthToken);
+        } else {
+          await signInAnonymously(auth);
         }
-    </style>
-</head>
-<body class="min-h-screen p-4 md:p-8">
+      } catch (e) {
+        console.error("Authentication failed:", e);
+      }
+    };
 
-    <div id="loading-indicator" class="fixed inset-0 bg-gray-900 bg-opacity-70 flex items-center justify-center z-50 hidden">
-        <div class="p-4 bg-white rounded-xl shadow-2xl flex items-center space-x-3">
-            <svg class="animate-spin h-5 w-5 text-indigo-600" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
-                <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
-                <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
-            </svg>
-            <span class="text-sm font-medium text-gray-700">데이터 로딩 중...</span>
-        </div>
-    </div>
+    signInUser();
 
-    <div class="max-w-4xl mx-auto">
-        <header class="text-center mb-8">
-            <h1 class="text-4xl font-extrabold text-indigo-700">Linky: 심플 링크 관리자</h1>
-            <p id="user-id-display" class="text-sm text-gray-500 mt-1">사용자 ID: N/A</p>
-        </header>
+    // 2. Auth State Listener
+    const unsubscribeAuth = onAuthStateChanged(auth, async (currentUser) => {
+      setUser(currentUser);
+      setIsAuthReady(true);
+      if (currentUser) {
+        const userRef = doc(db, `artifacts/${appId}/users/${currentUser.uid}/user_profile/main`);
+        const userSnap = await getDoc(userRef);
 
-        <!-- 새 링크 추가 폼 -->
-        <div class="bg-white p-6 rounded-2xl shadow-xl mb-8">
-            <h2 class="text-2xl font-semibold text-gray-800 mb-4 border-b pb-2">새 링크 추가</h2>
-            <form id="link-form" class="space-y-4">
-                <input type="hidden" id="link-id" value="">
+        if (!userSnap.exists()) {
+          // New user setup
+          await setDoc(userRef, {
+            userId: currentUser.uid,
+            displayName: currentUser.displayName || `User_${currentUser.uid.substring(0, 8)}`,
+            email: currentUser.email || `${currentUser.uid.substring(0, 8)}@placeholder.com`,
+            photoURL: currentUser.photoURL || '',
+            language: getInitialLanguage(),
+            isPremium: false,
+          });
+        }
+      }
+    });
 
-                <div>
-                    <label for="link-name" class="block text-sm font-medium text-gray-700 mb-1">링크 이름 (Title)</label>
-                    <input type="text" id="link-name" placeholder="예: 구글 검색 엔진" required
-                           class="w-full p-3 border border-gray-300 rounded-lg focus:ring-indigo-500 focus:border-indigo-500 transition duration-150">
-                </div>
+    return () => {
+      unsubscribeAuth();
+    };
+  }, []);
 
-                <div>
-                    <label for="link-url" class="block text-sm font-medium text-gray-700 mb-1">URL (https://...)</label>
-                    <input type="url" id="link-url" placeholder="예: https://www.google.com" required
-                           class="w-full p-3 border border-gray-300 rounded-lg focus:ring-indigo-500 focus:border-indigo-500 transition duration-150">
-                </div>
+  // 3. Firestore Data Listener (Pages)
+  useEffect(() => {
+    if (!isAuthReady || !user || !db) {
+      setPages([]);
+      setIsLoadingData(false);
+      return;
+    }
 
-                <div class="flex space-x-3">
-                    <button type="submit" id="submit-button"
-                            class="w-full py-3 px-4 bg-indigo-600 text-white font-semibold rounded-lg shadow-md hover:bg-indigo-700 transition duration-200 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:ring-offset-2">
-                        링크 저장
-                    </button>
-                    <button type="button" id="cancel-button"
-                            class="w-1/4 py-3 px-4 bg-gray-300 text-gray-700 font-semibold rounded-lg shadow-md hover:bg-gray-400 transition duration-200 hidden">
-                        취소
-                    </button>
-                </div>
-            </form>
-        </div>
+    const pagesColRef = collection(db, `artifacts/${appId}/users/${user.uid}/link_pages`);
+    
+    // Set up real-time listener for pages
+    const unsubscribePages = onSnapshot(pagesColRef, (snapshot) => {
+      const pageList = snapshot.docs.map(doc => ({
+        id: doc.id,
+        ...doc.data()
+      }));
+      setPages(pageList);
+      setIsLoadingData(false);
+    }, (error) => {
+      console.error("Failed to fetch pages:", error);
+      setIsLoadingData(false);
+    });
 
-        <!-- 링크 목록 -->
-        <div class="bg-white p-6 rounded-2xl shadow-xl">
-            <h2 class="text-2xl font-semibold text-gray-800 mb-4 border-b pb-2">저장된 링크 목록</h2>
-            <div id="link-list" class="space-y-4">
-                <p class="text-gray-500 text-center" id="empty-state">로딩 중... 또는 여기에 링크가 표시됩니다.</p>
-            </div>
-        </div>
+    return () => {
+      unsubscribePages();
+    };
+  }, [isAuthReady, user]);
 
-    </div>
+  return { user, pages, isAuthReady, isLoadingData, db, auth };
+};
 
-    <!-- Custom Modal for Confirmation -->
-    <div id="custom-modal" class="fixed inset-0 bg-gray-900 bg-opacity-70 items-center justify-center z-50 hidden">
-        <div class="bg-white p-6 rounded-xl shadow-2xl max-w-sm w-full mx-4">
-            <h3 id="modal-title" class="text-lg font-bold text-gray-800 mb-3">확인</h3>
-            <p id="modal-message" class="text-gray-600 mb-6">정말로 이 작업을 수행하시겠습니까?</p>
-            <div class="flex justify-end space-x-3">
-                <button id="modal-cancel-btn" class="px-4 py-2 bg-gray-200 text-gray-700 rounded-lg hover:bg-gray-300 transition">취소</button>
-                <button id="modal-confirm-btn" class="px-4 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700 transition">확인</button>
-            </div>
-        </div>
-    </div>
 
-    <!-- Firebase SDK 로드 -->
-    <script type="module">
-        import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
-        import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
-        import { getFirestore, collection, query, where, onSnapshot, doc, addDoc, updateDoc, deleteDoc, setLogLevel } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+// --- 5. APP COMPONENT ---
 
-        // Firestore 로깅 레벨 설정 (디버깅용)
-        setLogLevel('Debug');
+const App = () => {
+  const { user, pages, isAuthReady, isLoadingData, db, auth } = useFirebaseData();
+  const [view, setView] = useState('dashboard');
+  const [activePage, setActivePage] = useState(null);
+  const [currentLang, setCurrentLang] = useState(getInitialLanguage());
+  const t = useMemo(() => translations[currentLang], [currentLang]);
+  const [toast, setToast] = useState(null);
+  const [profileData, setProfileData] = useState(null);
 
-        // 전역 변수 설정 (캔버스 환경에서 제공됨)
-        const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
-        const firebaseConfig = JSON.parse(typeof __firebase_config !== 'undefined' ? __firebase_config : '{}');
-        const initialAuthToken = typeof __initial_auth_token !== 'undefined' ? __initial_auth_token : null;
+  // Fetch and sync profile data
+  useEffect(() => {
+    if (!user || !db) return;
+    const profileRef = doc(db, `artifacts/${appId}/users/${user.uid}/user_profile/main`);
+    
+    const unsubscribeProfile = onSnapshot(profileRef, (snap) => {
+      if (snap.exists()) {
+        setProfileData(snap.data());
+        setCurrentLang(snap.data().language || getInitialLanguage());
+      }
+    }, (error) => console.error("Error fetching profile:", error));
 
-        let db;
-        let auth;
-        let userId = 'loading';
-        let linksCollectionRef;
-        let isAuthReady = false;
+    return () => unsubscribeProfile();
+  }, [user, db]);
 
-        const linkForm = document.getElementById('link-form');
-        const linkList = document.getElementById('link-list');
-        const linkIdInput = document.getElementById('link-id');
-        const linkNameInput = document.getElementById('link-name');
-        const linkUrlInput = document.getElementById('link-url');
-        const submitButton = document.getElementById('submit-button');
-        const cancelButton = document.getElementById('cancel-button');
-        const emptyState = document.getElementById('empty-state');
-        const loadingIndicator = document.getElementById('loading-indicator');
-        const userIdDisplay = document.getElementById('user-id-display');
+  // Handle View Transitions and Active Page Synchronization (Crucial for refresh)
+  useEffect(() => {
+    if (isAuthReady) {
+      // Find the active page object to ensure real-time updates are reflected in the editor
+      if (activePage) {
+        const updatedPage = pages.find(p => p.id === activePage.id);
+        if (updatedPage) {
+            setActivePage(updatedPage);
+        } else {
+            // If the active page was deleted
+            setActivePage(null);
+            if (view !== 'login') setView('dashboard');
+        }
+      }
+
+      setView(user ? (view === 'login' ? 'dashboard' : view) : 'login');
+    }
+  }, [isAuthReady, user, pages, view]); // Added 'view' to dependencies to prevent login loop
+
+
+  const showToast = (message, type = 'success') => {
+    setToast({ message, type });
+  };
+
+  const handleLogout = async () => {
+    if (auth) {
+      await signOut(auth);
+      showToast(t.logout, 'success');
+      setPages([]);
+      setActivePage(null);
+    }
+  };
+
+  const handleUpdateProfile = async (newProfile) => {
+    if (!user || !db || !profileData) return;
+    const profileRef = doc(db, `artifacts/${appId}/users/${user.uid}/user_profile/main`);
+    try {
+      await updateDoc(profileRef, newProfile);
+      showToast(t.profileUpdateSuccess, 'success');
+    } catch (error) {
+      console.error("Error updating profile:", error);
+      showToast("프로필 업데이트 실패.", 'error');
+    }
+  };
+
+  const handleLanguageChange = (lang) => {
+    setCurrentLang(lang);
+    if (profileData) {
+      handleUpdateProfile({ language: lang });
+    }
+  };
+
+  // --- 6. PAGE MANAGEMENT ACTIONS ---
+  
+  const handleCreatePage = async (pageName, pageTitle) => {
+    if (!user || !db || !profileData) return;
+    if (pages.length >= 3 && !profileData.isPremium) {
+      showToast(t.pageLimitReached, 'error');
+      return;
+    }
+    
+    // Check for unique page name (in-memory check against real-time data)
+    if (pages.some(p => p.name === pageName)) {
+      showToast(t.pageNameExists, 'error');
+      return;
+    }
+
+    const pageColRef = collection(db, `artifacts/${appId}/users/${user.uid}/link_pages`);
+    try {
+      await addDoc(pageColRef, {
+        name: pageName.toLowerCase().replace(/\s/g, '-'),
+        title: pageTitle,
+        createdAt: new Date(),
+        settings: {
+          bgColor: '#ffffff',
+          bgImageUrl: '',
+          profileImageUrl: '', // <-- NEW DEFAULT
+          fontFamily: 'sans',
+          style: 'bar'
+        },
+        links: []
+      });
+      showToast(t.pageCreatedSuccess, 'success');
+    } catch (e) {
+      console.error("Error creating page:", e);
+      showToast("페이지 생성에 실패했습니다.", 'error');
+    }
+  };
+
+  const handleDeletePage = async (pageId) => {
+    if (!user || !db) return;
+    const pageRef = doc(db, `artifacts/${appId}/users/${user.uid}/link_pages`, pageId);
+    try {
+      await deleteDoc(pageRef);
+      showToast(t.pageDeletedSuccess, 'success');
+    } catch (e) {
+      console.error("Error deleting page:", e);
+      showToast("페이지 삭제에 실패했습니다.", 'error');
+    }
+  };
+  
+  // --- 7. LINK MANAGEMENT ACTIONS ---
+
+  const handleUpdatePageLinks = async (pageId, newLinks) => {
+    if (!user || !db || !profileData) return;
+    
+    // Enforce link limit for non-premium users
+    if (newLinks.length > 10 && !profileData.isPremium) {
+      showToast(t.linkLimitReached, 'error');
+      return;
+    }
+
+    const pageRef = doc(db, `artifacts/${appId}/users/${user.uid}/link_pages`, pageId);
+    try {
+        await updateDoc(pageRef, { links: newLinks });
+        showToast(t.linkAddedSuccess, 'success');
+    } catch (e) {
+        console.error("Error updating links:", e);
+        showToast("링크 업데이트에 실패했습니다.", 'error');
+    }
+  };
+  
+  const handleUpdatePageSettings = async (pageId, newSettings) => {
+    if (!user || !db) return;
+    const pageRef = doc(db, `artifacts/${appId}/users/${user.uid}/link_pages`, pageId);
+    try {
+        await updateDoc(pageRef, { settings: newSettings });
+        showToast(t.saveChanges, 'success');
+    } catch (e) {
+        console.error("Error updating settings:", e);
+        showToast("설정 업데이트에 실패했습니다.", 'error');
+    }
+  };
+
+
+  if (!isAuthReady || isLoadingData) {
+    return <LoadingScreen />;
+  }
+  
+  // --- VIEWS (Login, Dashboard, Editor, Public) ---
+  
+  // --- Link Edit/Add Modal Component ---
+  const LinkFormModal = ({ t, linkData, onSubmit, onCancel, pageSettings }) => {
+    const [formData, setFormData] = useState(linkData || { 
+        title: '', 
+        url: '', 
+        style: pageSettings.style, 
+        iconUrl: '' 
+    });
+    
+    // Auto-detect social icon based on URL input (only if iconUrl is currently empty)
+    useEffect(() => {
+        const newIcon = getSocialIconUrl(formData.url);
         
-        // Modal elements
-        const customModal = document.getElementById('custom-modal');
-        const modalTitle = document.getElementById('modal-title');
-        const modalMessage = document.getElementById('modal-message');
-        const modalConfirmBtn = document.getElementById('modal-confirm-btn');
-        const modalCancelBtn = document.getElementById('modal-cancel-btn');
-        let modalAction = null; // Stores the function to execute on confirmation
-
-        /**
-         * 커스텀 모달 표시
-         * @param {string} title - 모달 제목
-         * @param {string} message - 모달 메시지
-         * @param {function} onConfirm - '확인' 버튼 클릭 시 실행할 함수
-         */
-        function showModal(title, message, onConfirm) {
-            modalTitle.textContent = title;
-            modalMessage.textContent = message;
-            modalAction = onConfirm;
-            customModal.classList.remove('hidden');
-            customModal.classList.add('flex');
-            modalConfirmBtn.focus();
+        // Only suggest/auto-fill if the iconUrl is empty AND a social URL is detected.
+        if (newIcon && !formData.iconUrl) {
+            setFormData(prev => ({ ...prev, iconUrl: newIcon }));
+            showToast(t.socialIconAuto, 'success');
         }
+    }, [formData.url, formData.iconUrl, t]); // Dependencies are url and iconUrl
 
-        function hideModal() {
-            customModal.classList.remove('flex');
-            customModal.classList.add('hidden');
-            modalAction = null;
+    
+    const handleUrlChange = (e) => {
+        const url = e.target.value;
+        setFormData(prev => ({ ...prev, url: url }));
+    }
+    
+    const handleIconUrlChange = (e) => {
+        // When user manually types here, it overrides the auto-detection by setting iconUrl
+        const iconUrl = e.target.value;
+        setFormData(prev => ({ ...prev, iconUrl: iconUrl }));
+    }
+
+
+    const handleSubmit = (e) => {
+        e.preventDefault();
+        if (!formData.title || !formData.url) {
+            showToast(t.linkTitle + "와 " + t.linkUrl + "는 필수입니다.", 'error');
+            return;
         }
+        onSubmit(formData);
+    };
 
-        modalConfirmBtn.onclick = () => {
-            if (modalAction) {
-                modalAction();
-            }
-            hideModal();
-        };
+    const socialIcons = [
+        { name: 'YouTube', icon: 'https://placehold.co/48/FF0000/ffffff?text=YT' },
+        { name: 'Instagram', icon: 'https://placehold.co/48/E1306C/ffffff?text=IG' },
+        { name: 'TikTok', icon: 'https://placehold.co/48/000000/ffffff?text=TT' },
+        { name: 'Twitter (X)', icon: 'https://placehold.co/48/000000/ffffff?text=X' },
+        { name: 'Facebook', icon: 'https://placehold.co/48/1877F2/ffffff?text=FB' },
+        { name: 'Naver', icon: 'https://placehold.co/48/2DB400/ffffff?text=N' },
+        { name: 'Kakao', icon: 'https://placehold.co/48/FEE500/000000?text=K' },
+    ];
+    
+    const iconLabel = formData.style === 'box' ? t.customImageUrl : t.customIconUrl;
 
-        modalCancelBtn.onclick = hideModal;
+    return (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50">
+            <div className="bg-white p-6 rounded-xl shadow-2xl w-full max-w-md">
+                <h3 className="font-bold text-xl mb-4 text-gray-800">{linkData ? t.editLink : t.addLink}</h3>
+                <form onSubmit={handleSubmit} className="space-y-4">
+                    <input
+                        type="text"
+                        placeholder={t.linkTitle}
+                        value={formData.title}
+                        onChange={(e) => setFormData({ ...formData, title: e.target.value })}
+                        className="w-full p-3 border border-gray-300 rounded-lg focus:ring-indigo-500 focus:border-indigo-500"
+                        required
+                    />
+                    <input
+                        type="url"
+                        placeholder={t.linkUrl}
+                        value={formData.url}
+                        onChange={handleUrlChange}
+                        className="w-full p-3 border border-gray-300 rounded-lg focus:ring-indigo-500 focus:border-indigo-500"
+                        required
+                    />
+                    
+                    {/* Style Selection */}
+                    <div>
+                      <span className="font-medium mr-4 text-sm text-gray-700">{t.linkStyle}:</span>
+                      <button 
+                        type="button"
+                        onClick={() => setFormData({ ...formData, style: 'bar' })} 
+                        className={`py-1 px-3 rounded-full text-sm mr-2 transition ${formData.style === 'bar' ? 'bg-indigo-600 text-white' : 'bg-gray-200 text-gray-700'}`}
+                      >
+                        {t.styleBar}
+                      </button>
+                      <button 
+                        type="button"
+                        onClick={() => setFormData({ ...formData, style: 'box' })} 
+                        className={`py-1 px-3 rounded-full text-sm transition ${formData.style === 'box' ? 'bg-indigo-600 text-white' : 'bg-gray-200 text-gray-700'}`}
+                      >
+                        {t.styleBox}
+                      </button>
+                    </div>
 
-        // Firebase 초기화 및 인증 설정
-        async function initializeFirebase() {
-            try {
-                if (!firebaseConfig || Object.keys(firebaseConfig).length === 0) {
-                    console.error("Firebase Configuration is missing.");
-                    emptyState.textContent = "Firebase 설정 오류: 앱을 로드할 수 없습니다.";
-                    return;
-                }
-                const app = initializeApp(firebaseConfig);
-                db = getFirestore(app);
-                auth = getAuth(app);
+                    {/* Icon/Image URL Input (Conditional Label) */}
+                    <details className="p-3 bg-gray-50 rounded-lg border" open>
+                      <summary className="font-medium cursor-pointer text-sm flex items-center">{formData.style === 'box' ? <Image className="w-4 h-4 mr-2" /> : <Link2 className="w-4 h-4 mr-2" />}{t.selectIcon} / {t.imageUpload}</summary>
+                      <div className="mt-2 flex space-x-2 pb-2 overflow-x-auto">
+                        {socialIcons.map(s => (
+                          <img
+                            key={s.name}
+                            src={s.icon}
+                            alt={s.name}
+                            // FIX: Ensure clicking sets the iconUrl
+                            onClick={() => { setFormData(prev => ({ ...prev, iconUrl: s.icon })); }}
+                            className={`w-8 h-8 rounded-full cursor-pointer transition ring-2 flex-shrink-0 ${formData.iconUrl === s.icon ? 'ring-indigo-500' : 'ring-transparent hover:ring-indigo-300'}`}
+                            onError={(e) => e.target.src = 'https://placehold.co/32/cccccc/ffffff?text=?'}
+                            title={s.name}
+                          />
+                        ))}
+                      </div>
+                      <input
+                          type="url"
+                          placeholder={iconLabel}
+                          value={formData.iconUrl}
+                          // FIX: Ensure manual input is correctly captured and overrides auto-detection
+                          onChange={handleIconUrlChange}
+                          className="w-full p-2 border border-gray-300 rounded-lg mt-2 focus:ring-indigo-500 focus:border-indigo-500 text-sm"
+                      />
+                    </details>
+                    
+                    <div className="flex space-x-2 justify-end pt-4">
+                        <button type="button" onClick={onCancel} className="py-2 px-4 text-gray-600 rounded-xl hover:bg-gray-100 transition">{t.cancel}</button>
+                        <button type="submit" className="py-2 px-4 bg-green-500 text-white rounded-xl font-semibold hover:bg-green-600 transition duration-200">
+                            {linkData ? t.update : t.create}
+                        </button>
+                    </div>
+                </form>
+            </div>
+        </div>
+    );
+  };
 
-                loadingIndicator.classList.remove('hidden');
-                
-                // 인증 상태 변경 리스너 설정
-                onAuthStateChanged(auth, async (user) => {
-                    if (user) {
-                        userId = user.uid;
-                    } else {
-                        // 사용자 ID가 없으면 익명 로그인 시도
-                        await signInAnonymously(auth);
-                        userId = auth.currentUser.uid;
-                    }
 
-                    userIdDisplay.textContent = `사용자 ID: ${userId.substring(0, 8)}...`;
-                    // 컬렉션 경로 설정: /artifacts/{appId}/users/{userId}/links
-                    linksCollectionRef = collection(db, 'artifacts', appId, 'users', userId, 'links');
-                    isAuthReady = true;
-                    console.log("Firebase Auth Ready. User ID:", userId);
-                    fetchLinksRealtime();
-                    loadingIndicator.classList.add('hidden');
-                });
+  const SocialLogin = () => (
+    <div className="flex flex-col space-y-3">
+      <h2 className="text-xl font-bold mb-4">{t.loginTitle}</h2>
+      <p className="text-gray-500 mb-6">{t.loginSubtitle}</p>
+      
+      {/* Mocking Social Login buttons as full OAuth is complex in single file */}
+      {['Google', 'YouTube', 'Facebook', 'Instagram'].map(provider => (
+        <button
+          key={provider}
+          onClick={() => {
+            showToast(`${provider}를 통한 로그인 성공 (시뮬레이션)`);
+          }}
+          className="w-full py-3 px-4 bg-white border border-gray-300 rounded-xl text-gray-700 font-medium hover:bg-gray-50 transition duration-200 shadow-sm"
+        >
+          {t.socialLogin(provider)}
+        </button>
+      ))}
 
-                // 커스텀 토큰으로 로그인 시도
-                if (initialAuthToken) {
-                    await signInWithCustomToken(auth, initialAuthToken);
-                } else {
-                    // 토큰이 없으면 onAuthStateChanged에서 익명 로그인 처리
-                    console.log("No custom token provided, waiting for onAuthStateChanged to handle login.");
-                }
+      <p className="pt-4 text-sm text-gray-500 text-center">
+        {user?.isAnonymous ? "익명으로 로그인됨. 프로필에서 정보를 업데이트하세요." : ""}
+      </p>
+      
+      <div className="mt-4">
+        <h3 className="text-lg font-semibold mb-2">{t.language}</h3>
+        <div className="flex space-x-2 justify-center">
+          <button
+            onClick={() => handleLanguageChange('ko')}
+            className={`py-2 px-4 rounded-lg font-medium ${currentLang === 'ko' ? 'bg-indigo-600 text-white' : 'bg-gray-200 text-gray-700'}`}
+          >
+            한국어
+          </button>
+          <button
+            onClick={() => handleLanguageChange('en')}
+            className={`py-2 px-4 rounded-lg font-medium ${currentLang === 'en' ? 'bg-indigo-600 text-white' : 'bg-gray-200 text-gray-700'}`}
+          >
+            English
+          </button>
+        </div>
+      </div>
+    </div>
+  );
 
-            } catch (error) {
-                console.error("Firebase 초기화 또는 인증 중 오류 발생:", error);
-                emptyState.textContent = "Firebase 오류: 데이터 로딩에 실패했습니다.";
-                loadingIndicator.classList.add('hidden');
-            }
-        }
+  const Dashboard = () => {
+    const [isCreating, setIsCreating] = useState(false);
+    const [newPageName, setNewPageName] = useState('');
+    const [newPageTitle, setNewPageTitle] = useState('');
 
-        // 링크 목록 실시간 감지 및 렌더링
-        function fetchLinksRealtime() {
-            if (!isAuthReady) {
-                console.warn("Auth not ready, cannot fetch links.");
-                return;
-            }
+    const handleNameInput = (e) => {
+      // Basic sanitization for URL path
+      setNewPageName(e.target.value.toLowerCase().replace(/[^a-z0-9-]/g, ''));
+    };
 
-            // Firestore 쿼리 (정렬을 위해 클라이언트 측에서 정렬)
-            const q = query(linksCollectionRef);
+    const submitPage = () => {
+      if (!newPageName || !newPageTitle) {
+        showToast(t.pageNameError, 'error');
+        return;
+      }
+      handleCreatePage(newPageName, newPageTitle);
+      setIsCreating(false);
+      setNewPageName('');
+      setNewPageTitle('');
+    };
 
-            // 실시간 리스너 설정
-            const unsubscribe = onSnapshot(q, (snapshot) => {
-                if (!isAuthReady) return; // 다시 확인
+    const isLimitReached = pages.length >= 3 && !profileData?.isPremium;
 
-                const links = [];
-                snapshot.forEach(doc => {
-                    // 데이터 검증 및 역직렬화 (필요시)
-                    links.push({ id: doc.id, ...doc.data() });
-                });
+    return (
+      <div className="p-4 sm:p-6">
+        <h1 className="text-2xl font-bold text-gray-800 mb-6">{t.dashboard}</h1>
+        
+        <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center mb-6 p-4 bg-indigo-50 rounded-xl border border-indigo-200">
+            <div className="flex items-center mb-3 sm:mb-0">
+                <Zap className={`w-6 h-6 mr-3 ${profileData?.isPremium ? 'text-yellow-600' : 'text-indigo-600'}`} />
+                <div>
+                    <h2 className="text-lg font-semibold">{profileData?.isPremium ? t.premium : t.freeTier}</h2>
+                    <p className="text-sm text-indigo-700">{t.pageLimit(3)}, {t.linkLimit(10)}</p>
+                </div>
+            </div>
+            <button className="bg-white text-indigo-600 border border-indigo-600 py-2 px-4 rounded-xl font-medium hover:bg-indigo-100 transition duration-200">
+                {profileData?.isPremium ? t.premiumFeature : "Go Premium"}
+            </button>
+        </div>
 
-                // 생성 시간 (timestamp)을 기준으로 내림차순 정렬 (최신 링크가 위로 오도록)
-                links.sort((a, b) => (b.timestamp || 0) - (a.timestamp || 0)); 
-                
-                renderLinks(links);
-            }, (error) => {
-                console.error("링크 실시간 업데이트 감지 중 오류 발생:", error);
-                emptyState.textContent = "링크 로딩 중 오류가 발생했습니다.";
-            });
+        <button
+          onClick={() => isLimitReached ? showToast(t.pageLimitReached, 'error') : setIsCreating(true)}
+          disabled={isLimitReached}
+          className={`w-full py-3 px-4 rounded-xl font-semibold transition duration-200 flex items-center justify-center mb-8 ${isLimitReached ? 'bg-gray-300 text-gray-600 cursor-not-allowed' : 'bg-indigo-600 text-white hover:bg-indigo-700 shadow-md'}`}
+        >
+          <Plus className="w-5 h-5 mr-2" />
+          {t.createPage} ({pages.length}/3)
+        </button>
+        
+        {isCreating && (
+          <div className="p-4 mb-6 border border-gray-300 rounded-xl bg-white shadow-lg">
+            <h3 className="font-semibold text-lg mb-3">{t.createPage}</h3>
+            <input
+              type="text"
+              placeholder={t.pageNamePlaceholder}
+              value={newPageName}
+              onChange={handleNameInput}
+              className="w-full p-3 border border-gray-300 rounded-lg mb-2 focus:ring-indigo-500 focus:border-indigo-500"
+            />
+            <input
+              type="text"
+              placeholder={t.linkTitle}
+              value={newPageTitle}
+              onChange={(e) => setNewPageTitle(e.target.value)}
+              className="w-full p-3 border border-gray-300 rounded-lg mb-4 focus:ring-indigo-500 focus:border-indigo-500"
+            />
+            <div className="flex space-x-2 justify-end">
+              <button type="button" onClick={() => setIsCreating(false)} className="py-2 px-4 text-gray-600 rounded-xl hover:bg-gray-100 transition">{t.cancel}</button>
+              <button type="button" onClick={submitPage} className="py-2 px-4 bg-green-500 text-white rounded-xl hover:bg-green-600 transition">{t.create}</button>
+            </div>
+          </div>
+        )}
 
-            // 클린업 함수를 반환할 수 있지만, 단일 페이지 앱이므로 생략
-            // return unsubscribe;
-        }
+        <h2 className="text-xl font-semibold mb-4 text-gray-800">My Pages</h2>
+        
+        {pages.length === 0 ? (
+          <p className="text-gray-500 p-6 text-center border border-dashed rounded-xl">{t.noPages}</p>
+        ) : (
+          <div className="space-y-4">
+            {pages.map(page => (
+              <div key={page.id} className="bg-white p-4 rounded-xl shadow-md flex justify-between items-center border border-gray-200">
+                <div>
+                  <div className="font-semibold text-lg text-indigo-600">{page.title}</div>
+                  <div className="text-sm text-gray-500 break-all">
+                    https://linky.app/{user?.uid.substring(0,4)}/{page.name}
+                  </div>
+                </div>
+                <div className="flex space-x-1">
+                  <IconButton onClick={() => { setActivePage(page); setView('public'); }} className="text-blue-500" title={t.publicView}>
+                    <LayoutList className="w-5 h-5" />
+                  </IconButton>
+                  <IconButton onClick={() => { setActivePage(page); setView('editor'); }} className="text-indigo-500" title={t.editPage(page.name)}>
+                    <Edit className="w-5 h-5" />
+                  </IconButton>
+                  <IconButton onClick={() => handleDeletePage(page.id)} className="text-red-500" title="Delete">
+                    <Trash2 className="w-5 h-5" />
+                  </IconButton>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+    );
+  };
+  
+  const PageEditor = ({ page }) => {
+    // Links and settings are now fully controlled by the 'page' prop which is synced via onSnapshot
+    const links = page.links || [];
+    const settings = page.settings || { bgColor: '#ffffff', bgImageUrl: '', profileImageUrl: '', fontFamily: 'sans', style: 'bar' };
+    
+    const [isAddingLink, setIsAddingLink] = useState(false);
+    const [editingLink, setEditingLink] = useState(null);
 
-        // 링크 목록 UI 렌더링
-        function renderLinks(links) {
-            linkList.innerHTML = '';
-            if (links.length === 0) {
-                emptyState.textContent = "아직 저장된 링크가 없습니다. 새 링크를 추가해 보세요!";
-                linkList.appendChild(emptyState);
-                return;
-            }
+    
+    // --- Link Actions ---
+    const handleAddLinkSubmit = (linkData) => {
+      const updatedLinks = [...links, {
+        id: crypto.randomUUID(),
+        ...linkData,
+        type: linkData.style === 'box' ? 'image' : 'social',
+      }];
+      
+      handleUpdatePageLinks(page.id, updatedLinks);
+      setIsAddingLink(false);
+    };
+
+    const handleEditLinkSubmit = (linkData) => {
+        const updatedLinks = links.map(link => 
+            link.id === editingLink.id 
+                ? { ...link, ...linkData, type: linkData.style === 'box' ? 'image' : 'social' } 
+                : link
+        );
+        
+        handleUpdatePageLinks(page.id, updatedLinks);
+        setEditingLink(null);
+        showToast("링크가 성공적으로 수정되었습니다.", 'success');
+    };
+
+    const handleDeleteLink = (id) => {
+      const updatedLinks = links.filter(link => link.id !== id);
+      handleUpdatePageLinks(page.id, updatedLinks);
+      showToast(t.linkDeletedSuccess, 'success');
+    };
+
+    // --- Settings Actions ---
+    const handleSettingsChange = (key, value) => {
+        const newSettings = { ...settings, [key]: value };
+        // Immediately update settings in the database
+        handleUpdatePageSettings(page.id, newSettings);
+    };
+
+    return (
+      <div className="p-4 sm:p-6 bg-gray-50 min-h-full">
+        {isAddingLink && <LinkFormModal t={t} onSubmit={handleAddLinkSubmit} onCancel={() => setIsAddingLink(false)} pageSettings={settings} />}
+        {editingLink && <LinkFormModal t={t} linkData={editingLink} onSubmit={handleEditLinkSubmit} onCancel={() => setEditingLink(null)} pageSettings={settings} />}
+
+        <div className="flex justify-between items-center mb-6">
+            <h1 className="text-2xl font-bold text-gray-800 truncate">{t.editPage(page.title)}</h1>
+            <button 
+                onClick={() => setView('dashboard')} 
+                className="py-2 px-4 bg-gray-200 text-gray-800 rounded-xl text-sm hover:bg-gray-300 transition duration-200"
+            >
+                {t.dashboard}
+            </button>
+        </div>
+
+        {/* Design Settings Accordion */}
+        <details className="mb-6 p-4 bg-white rounded-xl shadow border border-gray-200" open>
+            <summary className="flex items-center font-semibold text-lg cursor-pointer py-1">
+                <Settings className="w-5 h-5 mr-2 text-indigo-500" /> {t.designSettings}
+            </summary>
+            <div className="mt-4 space-y-4">
+                {/* Background Color */}
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between p-2 rounded-lg border">
+                    <label className="font-medium flex items-center mb-1 sm:mb-0"><Palette className="w-4 h-4 mr-2" />{t.bgColor}</label>
+                    <input 
+                        type="color" 
+                        value={settings.bgColor} 
+                        onChange={(e) => handleSettingsChange('bgColor', e.target.value)}
+                        className="w-16 h-8 rounded-md border-none p-0 cursor-pointer"
+                    />
+                </div>
+                {/* Background Image URL */}
+                <div className="flex flex-col p-2 rounded-lg border">
+                    <label className="font-medium flex items-center mb-1 text-gray-700"><Upload className="w-4 h-4 mr-2" />{t.bgImage}</label>
+                    <input
+                        type="url"
+                        placeholder="https://image-url.com/background.jpg"
+                        value={settings.bgImageUrl || ''}
+                        onChange={(e) => handleSettingsChange('bgImageUrl', e.target.value)}
+                        className="w-full p-2 border border-gray-300 rounded-lg text-sm focus:ring-indigo-500 focus:border-indigo-500"
+                    />
+                    {settings.bgImageUrl && (
+                        <p className="text-xs text-gray-500 mt-1">배경색 위에 이미지가 덮어쓰여집니다.</p>
+                    )}
+                </div>
+                {/* Profile/Page Image URL (NEW FEATURE) */}
+                <div className="flex flex-col p-2 rounded-lg border">
+                    <label className="font-medium flex items-center mb-1 text-gray-700"><User className="w-4 h-4 mr-2" />{t.profileImage}</label>
+                    <input
+                        type="url"
+                        placeholder="https://image-url.com/profile.jpg"
+                        value={settings.profileImageUrl || ''}
+                        onChange={(e) => handleSettingsChange('profileImageUrl', e.target.value)}
+                        className="w-full p-2 border border-gray-300 rounded-lg text-sm focus:ring-indigo-500 focus:border-indigo-500"
+                    />
+                </div>
+                {/* Font Family */}
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between p-2 rounded-lg border">
+                    <label className="font-medium flex items-center mb-1 sm:mb-0"><Type className="w-4 h-4 mr-2" />{t.fontFamily}</label>
+                    <select 
+                        value={settings.fontFamily} 
+                        onChange={(e) => handleSettingsChange('fontFamily', e.target.value)}
+                        className="p-2 border border-gray-300 rounded-lg"
+                    >
+                        <option value="sans">Sans-serif (기본)</option>
+                        <option value="serif">Serif (명조)</option>
+                        <option value="mono">Monospace (고정폭)</option>
+                        <option value="gothic">Gothic (고딕, 깔끔함)</option>
+                        <option value="handwritten">Handwritten (손글씨, 독특함)</option>
+                    </select>
+                </div>
+            </div>
+        </details>
+
+        {/* Link List and Add Link */}
+        <div className="p-4 bg-white rounded-xl shadow border border-gray-200">
+            <h2 className="text-xl font-semibold mb-4 flex justify-between items-center">
+                {t.linkTitle} ({links.length}/{profileData?.isPremium ? '∞' : '10'})
+                <button
+                    onClick={() => {
+                        if (links.length >= 10 && !profileData?.isPremium) {
+                            showToast(t.linkLimitReached, 'error');
+                        } else {
+                            setIsAddingLink(true);
+                        }
+                    }}
+                    disabled={links.length >= 10 && !profileData?.isPremium}
+                    className={`py-2 px-3 rounded-xl font-medium transition duration-200 flex items-center ${
+                      links.length >= 10 && !profileData?.isPremium
+                        ? 'bg-gray-300 text-gray-600 cursor-not-allowed'
+                        : 'bg-indigo-600 text-white hover:bg-indigo-700'
+                    }`}
+                >
+                    <Plus className="w-5 h-5" />
+                </button>
+            </h2>
+                        
+            <div className="space-y-3">
+              {links.length === 0 ? (
+                <p className="text-gray-500 p-4 text-center border border-dashed rounded-lg">링크가 없습니다. {t.addLink}을 눌러 추가하세요.</p>
+              ) : (
+                links.map(link => (
+                  <div key={link.id} className="p-3 bg-gray-50 rounded-xl flex items-center justify-between border border-gray-200">
+                    <div className="flex items-center min-w-0">
+                      {link.iconUrl ? (
+                        <img src={link.iconUrl} alt="icon" className="w-6 h-6 mr-3 rounded-full flex-shrink-0 object-cover" onError={(e) => e.target.src = 'https://placehold.co/24/cccccc/ffffff?text=?'} />
+                      ) : (
+                        link.style === 'box' ? <Image className="w-6 h-6 mr-3 text-indigo-500 flex-shrink-0" /> : <LinkIcon className="w-6 h-6 mr-3 text-indigo-500 flex-shrink-0" />
+                      )}
+                      <div className="min-w-0">
+                          <div className="font-medium truncate">{link.title} ({link.style === 'box' ? t.styleBox : t.styleBar})</div>
+                          <div className="text-xs text-gray-500 truncate">{link.url}</div>
+                      </div>
+                    </div>
+                    <div className="flex space-x-1 flex-shrink-0">
+                      <IconButton onClick={() => setEditingLink(link)} className="text-indigo-500" title={t.editLink}>
+                          <Edit className="w-5 h-5" />
+                      </IconButton>
+                      <IconButton onClick={() => handleDeleteLink(link.id)} className="text-red-500" title="Delete">
+                        <Trash2 className="w-5 h-5" />
+                      </IconButton>
+                    </div>
+                  </div>
+                ))
+              )}
+            </div>
+        </div>
+      </div>
+    );
+  };
+  
+  const PublicView = ({ page }) => {
+    const { settings, links } = page;
+    
+    const fontFamilyClass = `font-${settings.fontFamily}`;
+    
+    // Determine background style
+    const bgStyle = settings.bgImageUrl ? {
+        backgroundImage: `url(${settings.bgImageUrl})`,
+        backgroundSize: 'cover',
+        backgroundPosition: 'center',
+        backgroundAttachment: 'fixed', // Add fixed attachment for better mobile experience
+        backgroundColor: settings.bgColor // Fallback
+    } : {
+        backgroundColor: settings.bgColor
+    };
+
+    return (
+      <div 
+        style={bgStyle} 
+        className={`flex flex-col items-center p-6 transition-all duration-500 min-h-screen ${fontFamilyClass}`}
+      >
+        <div className="w-full max-w-sm">
+            <div className="flex justify-between items-center mb-6">
+                <button 
+                    onClick={() => setView('editor')} 
+                    className="flex items-center py-2 px-3 bg-gray-800 bg-opacity-80 text-white rounded-xl text-sm hover:bg-gray-700 transition shadow-lg"
+                >
+                    <Edit className="w-4 h-4 mr-1" />
+                    {t.editPage(page.title)}
+                </button>
+            </div>
+          
+            <div className="text-center mb-8 bg-white bg-opacity-70 p-4 rounded-xl shadow-lg">
+              {/* Profile Image Display (Feature 1) */}
+              {settings.profileImageUrl ? (
+                    <img 
+                        src={settings.profileImageUrl} 
+                        alt="Profile Icon" 
+                        className="w-16 h-16 mx-auto mb-2 text-gray-700 bg-gray-200 p-2 rounded-full object-cover shadow-md" 
+                        onError={(e) => e.target.src = 'https://placehold.co/64/cccccc/ffffff?text=Icon'}
+                    />
+                ) : (
+                    <User className="w-16 h-16 mx-auto mb-2 text-gray-700 bg-gray-200 p-2 rounded-full" />
+                )}
+
+              <h1 className="text-2xl font-bold text-gray-800">{page.title}</h1>
+              <p className="text-sm text-gray-500 break-all mt-1">
+                https://linky.app/{user?.uid.substring(0,4)}/{page.name}
+              </p>
+            </div>
             
-            // emptyState가 있으면 숨김
-            if (emptyState.parentNode === linkList) {
-                linkList.removeChild(emptyState);
-            }
+            <div className={`space-y-4 ${settings.style === 'box' ? 'grid grid-cols-2 gap-4 space-y-0' : 'space-y-4'}`}>
+              {links.map(link => (
+                <a 
+                  key={link.id} 
+                  href={link.url} 
+                  target="_blank" 
+                  rel="noopener noreferrer"
+                  className={`flex items-center justify-center font-semibold text-white transition duration-200 shadow-xl transform hover:scale-[1.02] ${
+                    link.style === 'bar' 
+                      ? 'bg-indigo-600 hover:bg-indigo-700 w-full p-3 rounded-xl' 
+                      : 'bg-white p-2 rounded-xl flex-col text-gray-800 border-2 border-gray-200 shadow-md'
+                  }`}
+                >
+                  {link.style === 'bar' ? (
+                    <>
+                      {link.iconUrl ? (
+                          <img src={link.iconUrl} alt="icon" className="w-6 h-6 mr-3 rounded-full flex-shrink-0 object-cover" onError={(e) => e.target.src = 'https://placehold.co/24/cccccc/ffffff?text=?'} />
+                      ) : (
+                        <LinkIcon className="w-6 h-6 mr-3 flex-shrink-0" />
+                      )}
+                      {link.title}
+                    </>
+                  ) : (
+                    <>
+                      {/* Box Style: Square image on top, title below */}
+                      <div className="w-full relative aspect-square mb-2 overflow-hidden rounded-xl">
+                          <img 
+                              src={link.iconUrl} 
+                              alt={link.title} 
+                              className="w-full h-full object-cover" 
+                              onError={(e) => e.target.src = 'https://placehold.co/400x400/cccccc/ffffff?text=Image'} 
+                          />
+                      </div>
+                      <span className="text-sm font-bold text-center block w-full truncate">{link.title}</span>
+                    </>
+                  )}
+                </a>
+              ))}
+            </div>
+        </div>
+      </div>
+    );
+  };
 
-            links.forEach(link => {
-                // Link Card UI
-                const linkCard = document.createElement('div');
-                linkCard.className = 'link-card p-4 border border-gray-200 bg-gray-50 rounded-xl shadow-sm hover:shadow-md transition duration-200 flex flex-col md:flex-row justify-between items-start md:items-center space-y-3 md:space-y-0';
-                linkCard.dataset.id = link.id;
+  const ProfileSettings = () => {
+    const [name, setName] = useState(profileData?.displayName || '');
+    const [lang, setLang] = useState(profileData?.language || currentLang);
+    
+    const handleSubmit = (e) => {
+      e.preventDefault();
+      handleUpdateProfile({ displayName: name, language: lang });
+      setCurrentLang(lang);
+    };
 
-                // Content Area
-                const contentDiv = document.createElement('div');
-                contentDiv.className = 'flex-grow w-full md:w-auto overflow-hidden';
-
-                // Title (Name)
-                const titleElement = document.createElement('a');
-                titleElement.href = link.url;
-                titleElement.target = '_blank';
-                titleElement.rel = 'noopener noreferrer';
-                titleElement.textContent = link.name;
-                titleElement.className = 'text-lg font-semibold text-indigo-700 hover:text-indigo-900 truncate block';
-
-                // URL
-                const urlElement = document.createElement('p');
-                urlElement.textContent = link.url;
-                urlElement.className = 'text-sm text-gray-500 truncate block';
-
-                contentDiv.appendChild(titleElement);
-                contentDiv.appendChild(urlElement);
-
-                // Actions Area
-                const actionsDiv = document.createElement('div');
-                actionsDiv.className = 'flex space-x-2 flex-shrink-0';
-                
-                // Edit Button
-                const editButton = document.createElement('button');
-                editButton.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" viewBox="0 0 20 20" fill="currentColor"><path d="M13.586 3.586a2 2 0 112.828 2.828l-.793.793-2.828-2.828.793-.793zm-4.42 2.828L15.414 10l-2.828 2.828-5.657-5.657 2.828-2.828zM3 17.25V14.5l8.5-8.5 2.75 2.75-8.5 8.5H3z"/></svg>`;
-                editButton.className = 'p-2 rounded-full text-indigo-500 hover:bg-indigo-100 transition';
-                editButton.title = '편집';
-                editButton.onclick = () => startEditLink(link);
-
-                // Delete Button
-                const deleteButton = document.createElement('button');
-                deleteButton.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" viewBox="0 0 20 20" fill="currentColor"><path fill-rule="evenodd" d="M9 2a1 1 0 00-.894.553L7.382 4H4a1 1 0 000 2v10a2 2 0 002 2h8a2 2 0 002-2V6a1 1 0 100-2h-3.382l-.724-1.447A1 1 0 0011 2H9zM7 8a1 1 0 012 0v6a1 1 0 11-2 0V8zm4 0a1 1 0 10-2 0v6a1 1 0 102 0V8z" clip-rule="evenodd"/></svg>`;
-                deleteButton.className = 'p-2 rounded-full text-red-500 hover:bg-red-100 transition';
-                deleteButton.title = '삭제';
-                deleteButton.onclick = () => showModal(
-                    '링크 삭제 확인', 
-                    `정말로 '${link.name}' 링크를 삭제하시겠습니까?`, 
-                    () => deleteLink(link.id)
-                );
-
-                actionsDiv.appendChild(editButton);
-                actionsDiv.appendChild(deleteButton);
-
-                linkCard.appendChild(contentDiv);
-                linkCard.appendChild(actionsDiv);
-
-                linkList.appendChild(linkCard);
-            });
-        }
-
-        // 링크 추가 및 업데이트 처리
-        linkForm.onsubmit = async (e) => {
-            e.preventDefault();
-            if (!isAuthReady) {
-                console.error("Firebase Auth가 준비되지 않았습니다. 잠시 후 다시 시도해 주세요.");
-                return;
-            }
-
-            loadingIndicator.classList.remove('hidden');
-
-            const id = linkIdInput.value.trim();
-            const name = linkNameInput.value.trim();
-            const url = linkUrlInput.value.trim();
+    return (
+      <div className="p-4 sm:p-6">
+        <h1 className="text-2xl font-bold text-gray-800 mb-6">{t.userProfile}</h1>
+        
+        <form onSubmit={handleSubmit} className="space-y-6 bg-white p-6 rounded-xl shadow-lg border border-gray-200 max-w-md mx-auto">
             
-            // 간단한 URL 유효성 검사 (browser type="url" handles most, but enforce https)
-            if (!url.startsWith('http://') && !url.startsWith('https://')) {
-                // 커스텀 모달을 사용하여 경고 표시
-                showModal('URL 형식 오류', 'URL은 "http://" 또는 "https://"로 시작해야 합니다.', () => {});
-                loadingIndicator.classList.add('hidden');
-                return;
-            }
+            <div className="flex flex-col items-center">
+                <User className="w-16 h-16 text-gray-600 mb-3 bg-gray-100 p-2 rounded-full" />
+                <h2 className="text-xl font-semibold">{profileData?.email || t.email}</h2>
+                <span className="text-sm text-gray-500 mt-1">User ID: {user?.uid.substring(0, 8)}...</span>
+            </div>
 
-            const linkData = {
-                name: name,
-                url: url,
-            };
+            <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">{t.displayName}</label>
+                <input
+                    type="text"
+                    value={name}
+                    onChange={(e) => setName(e.target.value)}
+                    className="w-full p-3 border border-gray-300 rounded-lg focus:ring-indigo-500 focus:border-indigo-500"
+                    required
+                />
+            </div>
 
-            try {
-                if (id) {
-                    // 업데이트
-                    const docRef = doc(db, linksCollectionRef.path, id);
-                    await updateDoc(docRef, linkData);
-                    console.log("Link updated:", id);
-                } else {
-                    // 추가
-                    await addDoc(linksCollectionRef, {
-                        ...linkData,
-                        timestamp: Date.now() // 타임스탬프 추가
-                    });
-                    console.log("Link added.");
-                }
+            <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">{t.language}</label>
+                <select 
+                    value={lang} 
+                    onChange={(e) => setLang(e.target.value)}
+                    className="w-full p-3 border border-gray-300 rounded-lg focus:ring-indigo-500 focus:border-indigo-500"
+                >
+                    <option value="ko">한국어</option>
+                    <option value="en">English</option>
+                </select>
+            </div>
 
-                // 폼 초기화 및 편집 모드 종료
-                resetForm();
+            <button
+                type="submit"
+                className="w-full py-3 px-4 bg-indigo-600 text-white rounded-xl font-semibold hover:bg-indigo-700 transition duration-200 shadow-md"
+            >
+                {t.updateProfile}
+            </button>
+        </form>
+      </div>
+    );
+  };
 
-            } catch (error) {
-                console.error("링크 저장/업데이트 중 오류 발생:", error);
-                showModal('오류', '링크 저장/업데이트 중 문제가 발생했습니다.', () => {});
-            } finally {
-                loadingIndicator.classList.add('hidden');
-            }
-        };
 
-        // 편집 모드 시작
-        function startEditLink(link) {
-            linkIdInput.value = link.id;
-            linkNameInput.value = link.name;
-            linkUrlInput.value = link.url;
-            submitButton.textContent = '링크 수정 완료';
-            submitButton.classList.replace('bg-indigo-600', 'bg-green-600');
-            submitButton.classList.replace('hover:bg-indigo-700', 'hover:bg-green-700');
-            cancelButton.classList.remove('hidden');
-            linkNameInput.focus();
+  // --- MAIN LAYOUT ---
+
+  const renderContent = () => {
+    switch (view) {
+      case 'login':
+        return <div className="flex items-center justify-center min-h-screen bg-gray-50 p-4"><div className="w-full max-w-sm bg-white p-6 rounded-2xl shadow-xl"><SocialLogin /></div></div>;
+      case 'dashboard':
+        return <Dashboard />;
+      case 'editor':
+        return activePage ? <PageEditor page={activePage} /> : <Dashboard />;
+      case 'public':
+        return activePage ? <PublicView page={activePage} /> : <Dashboard />;
+      case 'profile':
+        return <ProfileSettings />;
+      default:
+        return <Dashboard />;
+    }
+  };
+
+  return (
+    <div className="min-h-screen bg-gray-50">
+      <style>{`
+        /* Custom font family definitions */
+        .font-sans { font-family: 'Inter', system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, "Noto Sans", sans-serif; }
+        .font-serif { font-family: 'Georgia', 'Times New Roman', serif; }
+        .font-mono { font-family: 'Menlo', 'Monaco', 'Consolas', monospace; }
+        /* Korean-friendly Gothic/Clean Font */
+        .font-gothic { font-family: 'Malgun Gothic', 'Noto Sans KR', sans-serif; }
+        /* Fun/Handwritten Font - using common web cursive/fantasy options as fallback */
+        .font-handwritten { font-family: 'Bradley Hand ITC', 'Comic Sans MS', cursive, sans-serif; }
+        
+        /* Ensure the square aspect ratio for box images */
+        .aspect-square {
+            aspect-ratio: 1 / 1;
         }
+      `}</style>
+      
+      {/* Sidebar/Mobile Menu */}
+      {user && view !== 'login' && view !== 'public' && (
+        <nav className="bg-white border-b border-gray-200 shadow-sm sticky top-0 z-10">
+          <div className="flex justify-between items-center p-4">
+            <h1 className="text-xl font-bold text-indigo-600">{t.appTitle}</h1>
+            
+            <div className="flex space-x-2">
+                <IconButton onClick={() => setView('dashboard')} className={view === 'dashboard' ? 'bg-indigo-100 text-indigo-600' : 'text-gray-600'} title={t.dashboard}>
+                    <LayoutList className="w-6 h-6" />
+                </IconButton>
+                <IconButton onClick={() => setView('profile')} className={view === 'profile' ? 'bg-indigo-100 text-indigo-600' : 'text-gray-600'} title={t.profile}>
+                    <User className="w-6 h-6" />
+                </IconButton>
+                <IconButton onClick={handleLogout} className="text-red-500" title={t.logout}>
+                    <LogOut className="w-6 h-6" />
+                </IconButton>
+            </div>
+          </div>
+        </nav>
+      )}
 
-        // 폼 초기화 및 편집 모드 종료
-        function resetForm() {
-            linkForm.reset();
-            linkIdInput.value = '';
-            submitButton.textContent = '링크 저장';
-            submitButton.classList.replace('bg-green-600', 'bg-indigo-600');
-            submitButton.classList.replace('hover:bg-green-700', 'hover:bg-indigo-700');
-            cancelButton.classList.add('hidden');
-        }
+      {renderContent()}
 
-        // 취소 버튼 이벤트
-        cancelButton.onclick = resetForm;
+      {/* Toast Notification */}
+      {toast && <Toast message={toast.message} type={toast.type} onClose={() => setToast(null)} />}
+      
+    </div>
+  );
+};
 
-        // 링크 삭제
-        async function deleteLink(id) {
-            if (!isAuthReady) return;
-            loadingIndicator.classList.remove('hidden');
-            try {
-                const docRef = doc(db, linksCollectionRef.path, id);
-                await deleteDoc(docRef);
-                console.log("Link deleted:", id);
-            } catch (error) {
-                console.error("링크 삭제 중 오류 발생:", error);
-                showModal('오류', '링크 삭제 중 문제가 발생했습니다.', () => {});
-            } finally {
-                loadingIndicator.classList.add('hidden');
-            }
-        }
-
-        // 앱 시작
-        initializeFirebase();
-
-    </script>
-</body>
-</html>
+export default App;
